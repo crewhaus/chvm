@@ -1,0 +1,38 @@
+{
+  "name": "@crewhaus/version-manager",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "chvm — switch which crewhaus your shell runs: any npm release, your system install, or a local factory checkout.",
+  "keywords": ["crewhaus", "version-manager", "cli", "chvm"],
+  "main": "src/index.ts",
+  "bin": {
+    "chvm": "src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test src",
+    "test:e2e": "bun test test",
+    "lint": "biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@types/bun": "^1.2.0"
+  },
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Max Meier",
+    "email": "max@crewhaus.ai",
+    "url": "https://crewhaus.ai"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/crewhaus/version-manager.git"
+  },
+  "homepage": "https://github.com/crewhaus/version-manager#readme",
+  "bugs": {
+    "url": "https://github.com/crewhaus/version-manager/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": ["src", "README.md", "LICENSE"]
+}
