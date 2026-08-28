@@ -9,7 +9,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import { shimNames } from "../src/paths";
+import { invocation } from "../src/system";
 
 /**
  * End-to-end: drives the real CLI against a sandboxed CHVM_DIR.
@@ -41,8 +43,20 @@ function runChvm(args: string[], path: string): { code: number; stdout: string; 
   };
 }
 
+const WINDOWS = process.platform === "win32";
+
+/** The shim a bare `crewhaus` would resolve to here — `crewhaus.cmd` on Windows. */
+function shimEntry(): string {
+  return join(shims, shimNames("crewhaus")[0] as string);
+}
+
+/** PATH entries joined the way THIS platform parses them (";" on Windows, ":" elsewhere). */
+function withPath(...dirs: string[]): string {
+  return [...dirs, process.env.PATH].join(delimiter);
+}
+
 function runShim(path: string, cwd = homedir()): string {
-  const proc = Bun.spawnSync([join(shims, "crewhaus"), "--version"], {
+  const proc = Bun.spawnSync([...invocation(shimEntry()), "--version"], {
     cwd,
     env: { ...process.env, CHVM_DIR: sandbox, PATH: path },
     stdout: "pipe",
@@ -58,12 +72,20 @@ beforeAll(() => {
 
   fakeBin = join(sandbox, "fake-system-bin");
   mkdirSync(fakeBin, { recursive: true });
-  const fakeSystem = join(fakeBin, "crewhaus");
-  writeFileSync(
-    fakeSystem,
-    '#!/usr/bin/env bash\n[ "${1:-}" = "--version" ] && { echo 9.9.9-system; exit 0; }\necho fake\n',
-  );
-  chmodSync(fakeSystem, 0o755);
+  // Windows cannot run a shebang script, so the fake system install is a .cmd there
+  if (WINDOWS) {
+    writeFileSync(
+      join(fakeBin, "crewhaus.cmd"),
+      '@echo off\r\nif /i "%~1"=="--version" (echo 9.9.9-system& exit /b 0)\r\necho fake\r\n',
+    );
+  } else {
+    const fakeSystem = join(fakeBin, "crewhaus");
+    writeFileSync(
+      fakeSystem,
+      '#!/usr/bin/env bash\n[ "${1:-}" = "--version" ] && { echo 9.9.9-system; exit 0; }\necho fake\n',
+    );
+    chmodSync(fakeSystem, 0o755);
+  }
 
   fakeRepo = join(sandbox, "fake-factory");
   mkdirSync(join(fakeRepo, "apps", "cli", "src"), { recursive: true });
@@ -84,17 +106,20 @@ afterAll(() => {
 
 describe("chvm end to end", () => {
   test(`install ${VERSION} from npm`, () => {
-    const path = `${shims}:${process.env.PATH}`;
+    const path = withPath(shims);
     const result = runChvm(["install", VERSION], path);
     expect(result.stderr).toBe("");
     expect(result.code).toBe(0);
-    expect(existsSync(join(sandbox, "versions", VERSION, "node_modules", ".bin", "crewhaus"))).toBe(
-      true,
-    );
+    // the package entry, not node_modules/.bin — the .bin layout differs per platform
+    expect(
+      existsSync(
+        join(sandbox, "versions", VERSION, "node_modules", "crewhaus", "dist", "index.js"),
+      ),
+    ).toBe(true);
   }, 300_000);
 
   test(`use ${VERSION} — crewhaus --version reports it`, () => {
-    const path = `${shims}:${process.env.PATH}`;
+    const path = withPath(shims);
     const result = runChvm(["use", VERSION], path);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain(`crewhaus --version → ${VERSION}`);
@@ -103,18 +128,18 @@ describe("chvm end to end", () => {
   }, 120_000);
 
   test("the shim works from any cwd", () => {
-    const path = `${shims}:${process.env.PATH}`;
+    const path = withPath(shims);
     expect(runShim(path, tmpdir())).toBe(VERSION);
   }, 60_000);
 
   test("warns when the shims dir is not on PATH", () => {
-    const result = runChvm(["use", VERSION], `${process.env.PATH}`);
+    const result = runChvm(["use", VERSION], process.env.PATH ?? "");
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("chvm setup");
   }, 60_000);
 
   test("use system skips the shim and runs the next crewhaus on PATH", () => {
-    const path = `${shims}:${fakeBin}:${process.env.PATH}`;
+    const path = withPath(shims, fakeBin);
     const result = runChvm(["use", "system"], path);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("crewhaus --version → 9.9.9-system");
@@ -122,7 +147,7 @@ describe("chvm end to end", () => {
   }, 60_000);
 
   test("use local runs a factory checkout from source and remembers the path", () => {
-    const path = `${shims}:${process.env.PATH}`;
+    const path = withPath(shims);
     const withArg = runChvm(["use", "local", fakeRepo], path);
     expect(withArg.code).toBe(0);
     expect(withArg.stdout).toContain("crewhaus --version → 9.9.9-local");
@@ -136,7 +161,7 @@ describe("chvm end to end", () => {
   }, 120_000);
 
   test("current / which / ls report the active local target", () => {
-    const path = `${shims}:${process.env.PATH}`;
+    const path = withPath(shims);
     expect(runChvm(["current"], path).stdout).toContain("9.9.9-local");
     expect(runChvm(["which"], path).stdout.trim()).toBe(
       join(fakeRepo, "apps", "cli", "src", "index.ts"),
@@ -147,7 +172,7 @@ describe("chvm end to end", () => {
   }, 60_000);
 
   test("uninstall refuses the active version, then succeeds after switching", () => {
-    const path = `${shims}:${fakeBin}:${process.env.PATH}`;
+    const path = withPath(shims, fakeBin);
     expect(runChvm(["use", VERSION], path).code).toBe(0);
     const refused = runChvm(["uninstall", VERSION], path);
     expect(refused.code).toBe(1);
@@ -160,14 +185,14 @@ describe("chvm end to end", () => {
   }, 120_000);
 
   test("unknown versions fail with a helpful error", () => {
-    const path = `${shims}:${process.env.PATH}`;
+    const path = withPath(shims);
     const result = runChvm(["use", "0.0.99"], path);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("does not exist");
   }, 60_000);
 
   test("install system/local points at chvm use instead of suggesting itself", () => {
-    const path = `${shims}:${process.env.PATH}`;
+    const path = withPath(shims);
     const result = runChvm(["install", "system"], path);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("chvm use system");
@@ -178,12 +203,12 @@ describe("chvm end to end", () => {
   test("shim with a foreign CHVM_DIR does not exec itself forever", () => {
     const foreignDir = join(sandbox, "foreign-chvm");
     mkdirSync(foreignDir, { recursive: true });
-    const proc = Bun.spawnSync([join(shims, "crewhaus"), "--version"], {
+    const proc = Bun.spawnSync([...invocation(shimEntry()), "--version"], {
       cwd: homedir(),
       env: {
         ...process.env,
         CHVM_DIR: foreignDir, // empty: target defaults to "system"
-        PATH: `${shims}:${fakeBin}:${process.env.PATH}`,
+        PATH: withPath(shims, fakeBin),
       },
       stdout: "pipe",
       stderr: "pipe",
