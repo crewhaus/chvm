@@ -1,10 +1,34 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+/**
+ * Translate a Git Bash / MSYS / Cygwin path to Windows form.
+ *
+ * A Git Bash user who exports `CHVM_DIR=/c/foo` hands the same string to two readers with
+ * different path semantics: the bash shim resolves it to `C:\foo`, while win32 `path.join`
+ * resolves it to `\c\foo` on the current drive. They would then disagree about where the
+ * version file lives — and because `writeTarget` creates the directory it writes to, `chvm use`
+ * would report success while the shim, reading elsewhere, silently kept the old target.
+ *
+ * Exported for testing; a no-op off Windows and for paths already in Windows form.
+ */
+export function normalizeChvmDir(
+  dir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== "win32") return dir;
+  const msys = dir.match(/^\/(?:cygdrive\/)?([a-zA-Z])(\/.*)?$/);
+  if (!msys) return dir;
+  const drive = (msys[1] as string).toUpperCase();
+  const rest = (msys[2] ?? "").replace(/\//g, "\\");
+  return `${drive}:${rest === "" ? "\\" : rest}`;
+}
+
 /** Root of chvm's state. Override with CHVM_DIR (used by tests; respected by the shims too). */
 export function chvmDir(): string {
   const override = process.env.CHVM_DIR;
-  return override && override.length > 0 ? override : join(homedir(), ".chvm");
+  if (override && override.length > 0) return normalizeChvmDir(override);
+  return join(homedir(), ".chvm");
 }
 
 export function versionsDir(): string {
