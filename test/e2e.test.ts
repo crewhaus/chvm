@@ -27,11 +27,12 @@ let fakeRepo: string; // pretend factory checkout
 let shims: string;
 
 const VERSION = "0.5.4";
+const WINDOWS = process.platform === "win32";
 
 function runChvm(args: string[], path: string): { code: number; stdout: string; stderr: string } {
   const proc = Bun.spawnSync(["bun", chvmEntry, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, CHVM_DIR: sandbox, PATH: path },
+    env: childEnv(path),
     stdout: "pipe",
     stderr: "pipe",
     timeout: 300_000,
@@ -43,8 +44,6 @@ function runChvm(args: string[], path: string): { code: number; stdout: string; 
   };
 }
 
-const WINDOWS = process.platform === "win32";
-
 /** The shim a bare `crewhaus` would resolve to here — `crewhaus.cmd` on Windows. */
 function shimEntry(): string {
   return join(shims, shimNames("crewhaus")[0] as string);
@@ -55,10 +54,29 @@ function withPath(...dirs: string[]): string {
   return [...dirs, process.env.PATH].join(delimiter);
 }
 
+/**
+ * Child environment with exactly ONE path variable.
+ *
+ * Windows environment names are case-insensitive, and the real environment spells it `Path`.
+ * Spreading process.env and then setting `PATH` leaves BOTH keys in the block: Bun's own spawn
+ * collapses them, but cmd.exe does not — it takes the first, so the shim would inherit the
+ * runner's original PATH and never see our sandbox dirs. Strip every case variant first.
+ */
+function childEnv(path: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (/^path$/i.test(k) || v === undefined) continue;
+    env[k] = v;
+  }
+  env[WINDOWS ? "Path" : "PATH"] = path;
+  env.CHVM_DIR = sandbox;
+  return env;
+}
+
 function runShim(path: string, cwd = homedir()): string {
   const proc = Bun.spawnSync([...invocation(shimEntry()), "--version"], {
     cwd,
-    env: { ...process.env, CHVM_DIR: sandbox, PATH: path },
+    env: childEnv(path),
     stdout: "pipe",
     stderr: "pipe",
     timeout: 60_000,
@@ -205,11 +223,8 @@ describe("chvm end to end", () => {
     mkdirSync(foreignDir, { recursive: true });
     const proc = Bun.spawnSync([...invocation(shimEntry()), "--version"], {
       cwd: homedir(),
-      env: {
-        ...process.env,
-        CHVM_DIR: foreignDir, // empty: target defaults to "system"
-        PATH: withPath(shims, fakeBin),
-      },
+      // empty CHVM_DIR: the target defaults to "system"
+      env: { ...childEnv(withPath(shims, fakeBin)), CHVM_DIR: foreignDir },
       stdout: "pipe",
       stderr: "pipe",
       timeout: 15_000,
