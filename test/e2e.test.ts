@@ -29,10 +29,14 @@ let shims: string;
 const VERSION = "0.5.4";
 const WINDOWS = process.platform === "win32";
 
-function runChvm(args: string[], path: string): { code: number; stdout: string; stderr: string } {
+function runChvm(
+  args: string[],
+  path: string,
+  extraEnv: Record<string, string> = {},
+): { code: number; stdout: string; stderr: string } {
   const proc = Bun.spawnSync(["bun", chvmEntry, ...args], {
     cwd: repoRoot,
-    env: childEnv(path),
+    env: { ...childEnv(path), ...extraEnv },
     stdout: "pipe",
     stderr: "pipe",
     timeout: 300_000,
@@ -156,20 +160,37 @@ describe("chvm end to end", () => {
     expect(runShim(path, tmpdir())).toBe(VERSION);
   }, 60_000);
 
-  test("puts the shims dir on PATH itself when it is not there yet", () => {
-    // after `npm i -g @crewhaus/chvm`, `chvm use` is the first command anyone runs — it has to
-    // finish the job rather than print a note telling them to run a second one
-    const rc = join(sandbox, ".zshrc");
-    rmSync(rc, { force: true });
-    const result = runChvm(["use", VERSION], process.env.PATH ?? "");
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("Open a new terminal");
-    // and it says what it changed, rather than changing it silently
-    if (/zsh|bash/.test(process.env.SHELL ?? "")) {
-      expect(readFileSync(rc, "utf8")).toContain("chvm");
+  // Windows is excluded on purpose: there the equivalent path writes HKCU\\Environment, and a
+  // test suite has no business editing the registry. That branch is unit-tested instead.
+  test.skipIf(WINDOWS)(
+    "puts the shims dir on PATH itself when it is not there yet",
+    () => {
+      // after `npm i -g @crewhaus/chvm`, `chvm use` is the first command anyone runs — it has to
+      // finish the job rather than print a note telling them to run a second one.
+      // SHELL is pinned so the rc file is known: runners disagree about it (unset on some,
+      // /bin/bash on others), and an unset SHELL takes a different branch entirely.
+      const rc = join(sandbox, ".zshrc");
+      rmSync(rc, { force: true });
+      const result = runChvm(["use", VERSION], process.env.PATH ?? "", { SHELL: "/bin/zsh" });
+      expect(result.code).toBe(0);
+      // it names the file it edited, rather than changing a profile silently
       expect(result.stdout).toContain(rc);
-    }
-  }, 60_000);
+      expect(result.stdout).toContain("Open a new terminal");
+      expect(readFileSync(rc, "utf8")).toContain("chvm");
+    },
+    60_000,
+  );
+
+  test.skipIf(WINDOWS)(
+    "says what to run by hand when it will not edit a profile",
+    () => {
+      // an unset SHELL on posix means there is no rc file we are willing to touch
+      const result = runChvm(["use", VERSION], process.env.PATH ?? "", { SHELL: "" });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Add this yourself");
+    },
+    60_000,
+  );
 
   test("use system skips the shim and runs the next crewhaus on PATH", () => {
     const path = withPath(shims, fakeBin);
