@@ -12,6 +12,7 @@ import {
 import { FACTORY_CLI_ENTRY, resolveLocalRepo } from "./local";
 import { chvmDir, shimPath, shimsDir } from "./paths";
 import { fetchRegistry } from "./registry";
+import { selfEntry, whichOnPath } from "./runtime";
 import { isVersionLike, resolveVersion } from "./semver";
 import { RC_BLOCK, activationLine, ensureRcPath } from "./setup";
 import { writeShims } from "./shim";
@@ -74,7 +75,7 @@ function safeRealpath(path: string): string {
 }
 
 function shimOnPath(): boolean {
-  const resolved = Bun.which("crewhaus");
+  const resolved = whichOnPath("crewhaus");
   if (resolved === null) return false;
   const a = safeRealpath(resolved);
   const b = safeRealpath(shimPath());
@@ -93,11 +94,30 @@ function verifySwitch(target: Target): void {
         ? "the system crewhaus"
         : `crewhaus ${target.version}`;
   console.log(`Now using ${label} (crewhaus --version → ${reported})`);
-  if (!shimOnPath()) {
-    console.log("");
-    console.log("Note: `crewhaus` does not resolve to the chvm shim in this shell yet.");
-    console.log("Run `chvm setup` once, then restart your shell (or run the line it prints).");
+  if (shimOnPath()) return;
+
+  // The shims dir is not on PATH, so `crewhaus` would still resolve elsewhere (or nowhere).
+  // Put it there rather than telling the user to run a second command: after `npm i -g`,
+  // `chvm use` is the first thing anyone runs, and a version manager that switches nothing
+  // until you read a note is not doing its job. Always say what was changed.
+  const result = ensureRcPath();
+  console.log("");
+  if (result.changed && result.kind === "rc") {
+    console.log(`Added ${shimsDir()} to your PATH via ${result.rcFile}.`);
+  } else if (result.changed && result.kind === "user-path") {
+    console.log(`Added ${shimsDir()} to your user PATH.`);
+  } else if (result.kind === "none") {
+    console.log(`\`crewhaus\` will not resolve to the chvm shim until ${shimsDir()} is on PATH.`);
+    console.log(
+      result.reason
+        ? `chvm could not add it (${result.reason}). Add this yourself:`
+        : "chvm does not edit this shell's profile. Add this yourself:",
+    );
+    console.log(`  ${activationLine()}`);
+    return;
   }
+  console.log("Open a new terminal to pick it up, or run this in the current one:");
+  console.log(`  ${activationLine()}`);
 }
 
 export async function use(args: string[]): Promise<void> {
@@ -260,7 +280,7 @@ export async function which(): Promise<void> {
 
 export async function setup(args: string[]): Promise<void> {
   const windows = process.platform === "win32";
-  const chvmEntry = join(import.meta.dir, "index.ts");
+  const chvmEntry = selfEntry(import.meta.url);
   writeShims(chvmEntry);
   if (chvmDir() !== join(homedir(), ".chvm")) {
     console.log(`Note: CHVM_DIR is set, so the shims went to ${shimsDir()}.`);

@@ -4,14 +4,16 @@
   "type": "module",
   "description": "chvm — switch which crewhaus your shell runs: any npm release, your system install, or a local factory checkout. macOS, Linux, and Windows.",
   "keywords": ["crewhaus", "version-manager", "cli", "chvm"],
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "bin": {
-    "chvm": "src/index.ts"
+    "chvm": "dist/index.js"
   },
   "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node --minify-whitespace",
     "test": "bun test src",
     "test:e2e": "bun test test",
-    "lint": "biome check ."
+    "lint": "biome check .",
+    "prepublishOnly": "bun run build"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
@@ -34,5 +36,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "files": ["src", "README.md", "LICENSE"]
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=18"
+  }
 }

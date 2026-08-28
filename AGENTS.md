@@ -1,11 +1,20 @@
 # AGENTS.md — chvm
 
-`chvm`, the CrewHaus version manager. A zero-dependency Bun/TypeScript CLI plus generated shims.
-Repo: https://github.com/crewhaus/chvm. Supported on macOS, Linux, and Windows.
+`chvm`, the CrewHaus version manager. A zero-dependency TypeScript CLI plus generated shims.
+Repo: https://github.com/crewhaus/chvm, published as `@crewhaus/chvm`.
+Supported on macOS, Linux, and Windows.
+
+**Written in TypeScript, developed with Bun, published to run on Node.** `bun run build`
+bundles `src/index.ts` into the Node-targeted `dist/index.js` that npm ships, which is what
+makes `npm i -g @crewhaus/chvm` a one-line install on a machine with no Bun. Bun is still what
+runs `crewhaus` itself.
 
 ## Layout
 
 - `src/index.ts` — entry + dispatch; each command lives in `src/commands.ts`
+- `src/runtime.ts` — every call into the host runtime (spawn, sleep, PATH lookup, own path),
+  written against `node:` modules. **Nothing in `src/` may use a `Bun.*` global**: one would
+  build fine and then fail at runtime for every npm user. Add to this file instead.
 - `src/layout.ts` — the two facts every shim flavour and every caller must agree on: the
   `managed by chvm` marker and the path to a pinned install's entry. Change them here or not at all.
 - `src/shim.ts` — the generated shims. `SHIM_CONTENT` is the bash one (written on every platform;
@@ -29,7 +38,8 @@ Repo: https://github.com/crewhaus/chvm. Supported on macOS, Linux, and Windows.
 5. `bunx --bun @biomejs/biome check .` must pass; formatting matches factory (2-space, width 100).
    Note plain `bunx biome` resolves to an unrelated squatted package — always use `@biomejs/biome`.
 6. Anything platform-specific takes an injectable `platform` argument so it can be tested from
-   any machine. CI runs both suites on Linux, macOS, and Windows; keep it that way.
+   any machine. CI runs both suites on Linux, macOS, and Windows, and separately installs the
+   packed tarball and runs it under Node 18 and 22 on all three; keep it that way.
 7. Batch is not bash. The `.cmd` shim has no `exec` (forward `%ERRORLEVEL%` by hand), needs `call`
    before another batch file, uses `%*` for arguments, and is written with CRLF. It deliberately
    avoids `EnableDelayedExpansion`, which would eat a literal `!` in a user's path.

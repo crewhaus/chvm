@@ -70,6 +70,10 @@ function childEnv(path: string): Record<string, string> {
   }
   env[WINDOWS ? "Path" : "PATH"] = path;
   env.CHVM_DIR = sandbox;
+  // `chvm use` now puts the shims dir on PATH by itself, which means editing a shell profile.
+  // Point HOME at the sandbox so the suite can never touch the real one.
+  env.HOME = sandbox;
+  env.USERPROFILE = sandbox;
   return env;
 }
 
@@ -152,10 +156,19 @@ describe("chvm end to end", () => {
     expect(runShim(path, tmpdir())).toBe(VERSION);
   }, 60_000);
 
-  test("warns when the shims dir is not on PATH", () => {
+  test("puts the shims dir on PATH itself when it is not there yet", () => {
+    // after `npm i -g @crewhaus/chvm`, `chvm use` is the first command anyone runs — it has to
+    // finish the job rather than print a note telling them to run a second one
+    const rc = join(sandbox, ".zshrc");
+    rmSync(rc, { force: true });
     const result = runChvm(["use", VERSION], process.env.PATH ?? "");
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("chvm setup");
+    expect(result.stdout).toContain("Open a new terminal");
+    // and it says what it changed, rather than changing it silently
+    if (/zsh|bash/.test(process.env.SHELL ?? "")) {
+      expect(readFileSync(rc, "utf8")).toContain("chvm");
+      expect(result.stdout).toContain(rc);
+    }
   }, 60_000);
 
   test("use system skips the shim and runs the next crewhaus on PATH", () => {

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { chvmDir, versionFile } from "./paths";
+import { sleepSync } from "./runtime";
 
 /** rename() replaces atomically on POSIX; on Windows an AV/indexer can hold the target briefly. */
 function replaceFile(tmp: string, dest: string): void {
@@ -13,7 +14,7 @@ function replaceFile(tmp: string, dest: string): void {
         rmSync(tmp, { force: true });
         throw err;
       }
-      Bun.sleepSync(20 * (attempt + 1));
+      sleepSync(20 * (attempt + 1));
     }
   }
 }
