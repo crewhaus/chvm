@@ -1,8 +1,11 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import pkg from "../package.json";
 import * as commands from "./commands";
+import { selfEntry } from "./runtime";
 
-const HELP = `chvm — CrewHaus version manager
+export const HELP = `chvm — CrewHaus version manager
 
 Switch which \`crewhaus\` your shell runs, the way nvm switches Node.
 
@@ -17,7 +20,7 @@ Usage:
   chvm ls-remote            list versions published on npm
   chvm current              show what \`crewhaus\` runs right now
   chvm which                show the path \`crewhaus\` resolves to
-  chvm setup                put the chvm shims dir on your PATH (run once)
+  chvm setup                put the chvm shims dir on your PATH (\`chvm use\` does this too)
 
 A version can be partial: \`chvm use 0.5\` picks the newest 0.5.x.
 After any \`chvm use\`, \`crewhaus --version\` reflects it immediately in every shell.`;
@@ -73,4 +76,24 @@ async function main(): Promise<number> {
   }
 }
 
-process.exit(await main());
+/**
+ * Only run when this file IS the program, not when something imports it.
+ *
+ * `import.meta.main` is Bun-only and Node did not get it until v24, so compare paths instead.
+ * Both sides are realpath'd: an npm global install invokes us through a symlink
+ * (`<prefix>/bin/chvm` -> `.../dist/index.js`), so the raw strings never match.
+ */
+function isEntrypoint(): boolean {
+  const invoked = process.argv[1];
+  if (invoked === undefined) return false;
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  return real(invoked) === real(selfEntry(import.meta.url));
+}
+
+if (isEntrypoint()) process.exit(await main());
