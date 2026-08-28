@@ -1,6 +1,22 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { chvmDir, versionFile } from "./paths";
+
+/** rename() replaces atomically on POSIX; on Windows an AV/indexer can hold the target briefly. */
+function replaceFile(tmp: string, dest: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, dest);
+      return;
+    } catch (err) {
+      if (attempt >= 5) {
+        rmSync(tmp, { force: true });
+        throw err;
+      }
+      Bun.sleepSync(20 * (attempt + 1));
+    }
+  }
+}
 
 /** What the crewhaus shim should run. Persisted as one line in ~/.chvm/version. */
 export type Target =
@@ -40,7 +56,7 @@ export function writeTarget(target: Target): void {
   const file = versionFile();
   const tmp = join(dirname(file), `.version.tmp-${process.pid}`);
   writeFileSync(tmp, `${formatTarget(target)}\n`);
-  renameSync(tmp, file);
+  replaceFile(tmp, file);
 }
 
 export function describeTarget(target: Target): string {

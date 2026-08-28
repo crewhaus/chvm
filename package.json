@@ -1,8 +1,8 @@
 {
-  "name": "@crewhaus/version-manager",
+  "name": "@crewhaus/chvm",
   "version": "0.1.0",
   "type": "module",
-  "description": "chvm — switch which crewhaus your shell runs: any npm release, your system install, or a local factory checkout.",
+  "description": "chvm — switch which crewhaus your shell runs: any npm release, your system install, or a local factory checkout. macOS, Linux, and Windows.",
   "keywords": ["crewhaus", "version-manager", "cli", "chvm"],
   "main": "src/index.ts",
   "bin": {
@@ -25,11 +25,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/crewhaus/version-manager.git"
+    "url": "git+https://github.com/crewhaus/chvm.git"
   },
-  "homepage": "https://github.com/crewhaus/version-manager#readme",
+  "homepage": "https://github.com/crewhaus/chvm#readme",
   "bugs": {
-    "url": "https://github.com/crewhaus/version-manager/issues"
+    "url": "https://github.com/crewhaus/chvm/issues"
   },
   "publishConfig": {
     "access": "public"

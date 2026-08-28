@@ -7,15 +7,15 @@ import {
   installedVersions,
   isInstalled,
   uninstallVersion,
-  versionBin,
+  versionEntry,
 } from "./install";
 import { FACTORY_CLI_ENTRY, resolveLocalRepo } from "./local";
-import { chvmDir, shimPath } from "./paths";
+import { chvmDir, shimPath, shimsDir } from "./paths";
 import { fetchRegistry } from "./registry";
 import { isVersionLike, resolveVersion } from "./semver";
-import { RC_BLOCK, RC_LINE, ensureRcPath } from "./setup";
+import { RC_BLOCK, activationLine, ensureRcPath } from "./setup";
 import { writeShims } from "./shim";
-import { findSystemCrewhaus, probeVersion } from "./system";
+import { findSystemCrewhaus, invocation, probeVersion } from "./system";
 import { type Target, describeTarget, readTarget, writeTarget } from "./targets";
 
 class UsageError extends Error {}
@@ -75,11 +75,14 @@ function safeRealpath(path: string): string {
 
 function shimOnPath(): boolean {
   const resolved = Bun.which("crewhaus");
-  return resolved !== null && safeRealpath(resolved) === safeRealpath(shimPath());
+  if (resolved === null) return false;
+  const a = safeRealpath(resolved);
+  const b = safeRealpath(shimPath());
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 function verifySwitch(target: Target): void {
-  const reported = probeVersion([shimPath()]);
+  const reported = probeVersion(invocation(shimPath()));
   if (reported === null) {
     fail(`switched to ${describeTarget(target)}, but running \`crewhaus --version\` failed.`);
   }
@@ -93,7 +96,7 @@ function verifySwitch(target: Target): void {
   if (!shimOnPath()) {
     console.log("");
     console.log("Note: `crewhaus` does not resolve to the chvm shim in this shell yet.");
-    console.log("Run `chvm setup` once, then restart your shell (or run the export it prints).");
+    console.log("Run `chvm setup` once, then restart your shell (or run the line it prints).");
   }
 }
 
@@ -103,9 +106,10 @@ export async function use(args: string[]): Promise<void> {
 
   if (spec === "system") {
     if (!findSystemCrewhaus()) {
+      const example =
+        process.platform === "win32" ? "scoop install crewhaus" : "brew install crewhaus";
       fail(
-        "no system crewhaus found on PATH (beyond the chvm shim).\n" +
-          "Install one (e.g. `brew install crewhaus`) or pick a version: chvm use latest",
+        `no system crewhaus found on PATH (beyond the chvm shim).\nInstall one (e.g. \`${example}\`) or pick a version: chvm use latest`,
       );
     }
     writeTarget({ kind: "system" });
@@ -168,7 +172,7 @@ export async function list(): Promise<void> {
   }
   const system = findSystemCrewhaus();
   if (system) {
-    const version = probeVersion([system]);
+    const version = probeVersion(invocation(system));
     const active = target === null || target.kind === "system";
     console.log(`${mark(active)}system${version ? ` (${version}, ${system})` : ` (${system})`}`);
   }
@@ -206,7 +210,9 @@ export async function current(): Promise<void> {
   if (target === null) {
     const system = findSystemCrewhaus();
     if (system) {
-      console.log(`system → ${probeVersion([system]) ?? "unknown"} (${system}) — chvm default`);
+      console.log(
+        `system → ${probeVersion(invocation(system)) ?? "unknown"} (${system}) — chvm default`,
+      );
     } else {
       console.log("none — no version selected and no system crewhaus on PATH.");
     }
@@ -219,7 +225,7 @@ export async function current(): Promise<void> {
     case "system": {
       const system = findSystemCrewhaus();
       if (system) {
-        console.log(`system → ${probeVersion([system]) ?? "unknown"} (${system})`);
+        console.log(`system → ${probeVersion(invocation(system)) ?? "unknown"} (${system})`);
       } else {
         console.log("system — but no system crewhaus is on PATH right now.");
       }
@@ -243,7 +249,7 @@ export async function which(): Promise<void> {
     console.log(join(target.path, FACTORY_CLI_ENTRY));
     return;
   }
-  const bin = versionBin(target.version);
+  const bin = versionEntry(target.version);
   if (!existsSync(bin)) {
     fail(`crewhaus ${target.version} is not installed — run: chvm install ${target.version}`);
   }
@@ -251,31 +257,60 @@ export async function which(): Promise<void> {
 }
 
 export async function setup(args: string[]): Promise<void> {
+  const windows = process.platform === "win32";
   const chvmEntry = join(import.meta.dir, "index.ts");
   writeShims(chvmEntry);
   if (chvmDir() !== join(homedir(), ".chvm")) {
-    console.log(`Note: CHVM_DIR is set, so the shims went to ${chvmDir()}/shims.`);
-    console.log("The PATH line resolves CHVM_DIR at shell startup — export it in your rc first.");
+    console.log(`Note: CHVM_DIR is set, so the shims went to ${shimsDir()}.`);
+    console.log(
+      windows
+        ? "Set CHVM_DIR in your user environment too, or the shims will read the default."
+        : "The PATH line resolves CHVM_DIR at shell startup — export it in your rc first.",
+    );
   }
   if (args.includes("--print")) {
-    console.log("Add this to your shell profile:");
-    console.log(RC_BLOCK.trim());
+    console.log(
+      windows ? "Add this to your PowerShell profile:" : "Add this to your shell profile:",
+    );
+    console.log(windows ? activationLine() : RC_BLOCK.trim());
     return;
   }
+
   const result = ensureRcPath();
-  if (result.rcFile === null) {
-    console.log("Shims written. Your shell isn't zsh/bash, so add this to its profile yourself:");
-    console.log(RC_BLOCK.trim());
+  const next = () => {
+    console.log("  chvm use latest");
+    console.log("  crewhaus --version");
+  };
+
+  if (result.kind === "user-path") {
+    if (result.changed) {
+      console.log(`Shims written and ${shimsDir()} added to your user PATH.`);
+      console.log("Open a new terminal (or run this in the current one):");
+      console.log(`  ${activationLine()}`);
+    } else {
+      console.log("Shims written — your user PATH already has the chvm shims dir. Try:");
+    }
+    next();
     return;
   }
+
+  if (result.kind === "none") {
+    console.log(
+      result.reason
+        ? `Shims written, but the user PATH could not be updated (${result.reason}).`
+        : "Shims written. Your shell isn't zsh/bash, so add this to its profile yourself:",
+    );
+    console.log(windows ? activationLine() : RC_BLOCK.trim());
+    return;
+  }
+
   if (result.changed) {
     console.log(`Shims written and PATH added to ${result.rcFile}.`);
-    console.log(`Restart your shell (or run: ${RC_LINE}), then try:`);
+    console.log(`Restart your shell (or run: ${activationLine()}), then try:`);
   } else {
     console.log(`Shims written — ${result.rcFile} already has the chvm PATH entry. Try:`);
   }
-  console.log("  chvm use latest");
-  console.log("  crewhaus --version");
+  next();
 }
 
 export function isUsageError(err: unknown): err is UsageError {
