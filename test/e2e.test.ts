@@ -78,6 +78,10 @@ function childEnv(path: string): Record<string, string> {
   // Point HOME at the sandbox so the suite can never touch the real one.
   env.HOME = sandbox;
   env.USERPROFILE = sandbox;
+  // ...but that would also relocate bun's global install cache into the sandbox, which then has
+  // to be deleted at teardown — enough to time the afterAll hook out on Windows. Keep the cache
+  // outside, where it also survives between runs and makes the install step much faster.
+  env.BUN_INSTALL_CACHE_DIR = join(tmpdir(), "chvm-e2e-bun-cache");
   return env;
 }
 
@@ -129,8 +133,9 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  rmSync(sandbox, { recursive: true, force: true });
-});
+  // maxRetries: a Windows indexer or AV can hold a handle open just after the last spawn
+  rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+}, 60_000);
 
 describe("chvm end to end", () => {
   test(`install ${VERSION} from npm`, () => {
