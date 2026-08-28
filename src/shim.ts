@@ -1,12 +1,19 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { FACTORY_ENTRY_SEGMENTS, PINNED_ENTRY_SEGMENTS, SHIM_MARKER, joinFor } from "./layout";
+import {
+  ENTRY_FILE,
+  FACTORY_ENTRY_SEGMENTS,
+  LEGACY_ENTRY_CANDIDATES,
+  SHIM_MARKER,
+  joinFor,
+} from "./layout";
 import { shimNames, shimsDir } from "./paths";
 
-const POSIX_PINNED = joinFor("linux", PINNED_ENTRY_SEGMENTS);
-const WIN_PINNED = joinFor("win32", PINNED_ENTRY_SEGMENTS);
 const POSIX_FACTORY = joinFor("linux", FACTORY_ENTRY_SEGMENTS);
 const WIN_FACTORY = joinFor("win32", FACTORY_ENTRY_SEGMENTS);
+/** Fallback probe list for installs made before chvm recorded an entry file. */
+const POSIX_LEGACY = LEGACY_ENTRY_CANDIDATES.map((c) => `"$root/${c}"`).join(" \\\n           ");
+const WIN_LEGACY = LEGACY_ENTRY_CANDIDATES.map((c) => `"${c.replace(/\//g, "\\")}"`).join(" ");
 
 /**
  * The POSIX crewhaus shim. It re-reads $CHVM_DIR/version on every invocation, so
@@ -72,8 +79,21 @@ case "$target" in
     exec bun "$entry" "$@"
     ;;
   *)
-    entry="$CHVM_DIR/versions/$target/${POSIX_PINNED}"
-    if [ ! -f "$entry" ]; then
+    root="$CHVM_DIR/versions/$target"
+    entry=""
+    # chvm records the entry when it installs; older installs are probed instead,
+    # because 0.1.3/0.1.4 shipped src/index.ts and no dist/ at all
+    if [ -f "$root/${ENTRY_FILE}" ]; then
+      IFS= read -r rel < "$root/${ENTRY_FILE}" || true
+      rel="\${rel%$'\\r'}"
+      [ -n "$rel" ] && [ -f "$root/$rel" ] && entry="$root/$rel"
+    fi
+    if [ -z "$entry" ]; then
+      for candidate in ${POSIX_LEGACY}; do
+        [ -f "$candidate" ] && { entry="$candidate"; break; }
+      done
+    fi
+    if [ -z "$entry" ]; then
       echo "chvm: crewhaus $target is not installed — run: chvm install $target" >&2
       exit 127
     fi
@@ -120,8 +140,21 @@ if /i "%chvm_target:~0,6%"=="local:" goto chvm_local
 goto chvm_version
 
 :chvm_version
-set "chvm_entry=%CHVM_DIR%\\versions\\%chvm_target%\\${WIN_PINNED}"
-if not exist "%chvm_entry%" (
+set "chvm_root=%CHVM_DIR%\\versions\\%chvm_target%"
+set "chvm_entry="
+set "chvm_rel="
+REM chvm records the entry when it installs; older installs are probed below, because
+REM 0.1.3/0.1.4 shipped src/index.ts and no dist/ at all
+if exist "%chvm_root%\\${ENTRY_FILE}" (
+  set /p chvm_rel=<"%chvm_root%\\${ENTRY_FILE}"
+)
+if defined chvm_rel if exist "%chvm_root%\\%chvm_rel%" set "chvm_entry=%chvm_root%\\%chvm_rel%"
+if not defined chvm_entry (
+  for %%C in (${WIN_LEGACY}) do (
+    if not defined chvm_entry if exist "%chvm_root%\\%%~C" set "chvm_entry=%chvm_root%\\%%~C"
+  )
+)
+if not defined chvm_entry (
   >&2 echo chvm: crewhaus %chvm_target% is not installed - run: chvm install %chvm_target%
   exit /b 127
 )

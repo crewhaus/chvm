@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { RC_BLOCK, RC_LINE, activationLine, rcFileForShell, withChvmPath } from "./setup";
+import {
+  RC_BLOCK,
+  RC_LINE,
+  activationLine,
+  rcFileForShell,
+  shellFamily,
+  withChvmPath,
+} from "./setup";
 
 describe("withChvmPath", () => {
   test("appends the PATH block to existing content", () => {
@@ -63,19 +70,41 @@ describe("rcFileForShell", () => {
   });
 });
 
+describe("shellFamily", () => {
+  test("everything off Windows is posix", () => {
+    expect(shellFamily("linux", {})).toBe("posix");
+    expect(shellFamily("darwin", { SHELL: "/bin/zsh" })).toBe("posix");
+  });
+
+  test("Git Bash on Windows sets SHELL, so it is posix there too", () => {
+    expect(shellFamily("win32", { SHELL: "/usr/bin/bash" })).toBe("posix");
+  });
+
+  test("cmd.exe sets PROMPT without PSModulePath", () => {
+    expect(shellFamily("win32", { PROMPT: "$P$G" })).toBe("cmd");
+  });
+
+  test("PowerShell is the Windows default", () => {
+    expect(shellFamily("win32", {})).toBe("powershell");
+    expect(shellFamily("win32", { PROMPT: "$P$G", PSModulePath: "C:\\m" })).toBe("powershell");
+  });
+});
+
 describe("activationLine", () => {
   test("is the export line on posix", () => {
-    expect(activationLine("linux")).toBe(RC_LINE);
+    expect(activationLine("posix")).toBe(RC_LINE);
   });
 
-  test("is a PowerShell assignment on Windows, naming the real shims dir", () => {
-    expect(activationLine("win32", "C:\\Users\\me\\.chvm\\shims")).toBe(
-      '$env:Path = "C:\\Users\\me\\.chvm\\shims;$env:Path"',
-    );
+  test("each Windows shell gets syntax it can actually parse", () => {
+    const shims = "C:\\Users\\me\\.chvm\\shims";
+    expect(activationLine("powershell", shims)).toBe(`$env:Path = "${shims};$env:Path"`);
+    // pasting the PowerShell line into cmd.exe gives "'$env:Path' is not recognized"
+    expect(activationLine("cmd", shims)).toBe(`set "PATH=${shims};%PATH%"`);
   });
 
-  test("prepends, so the shim wins over an existing system install", () => {
-    expect(activationLine("win32", "S").startsWith('$env:Path = "S;')).toBe(true);
+  test("prepends in every shell, so the shim wins over an existing system install", () => {
+    expect(activationLine("powershell", "S").startsWith('$env:Path = "S;')).toBe(true);
+    expect(activationLine("cmd", "S").startsWith('set "PATH=S;')).toBe(true);
     expect(RC_LINE.includes("/shims:$PATH")).toBe(true);
   });
 });

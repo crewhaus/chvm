@@ -17,12 +17,34 @@ export const RC_BLOCK = `
 ${RC_LINE}
 `;
 
-/** The one-liner that puts the shims on PATH for the *current* shell, per shell family. */
-export function activationLine(
+export type ShellFamily = "posix" | "powershell" | "cmd";
+
+/**
+ * Which shell we are talking to. On Windows, Git Bash sets SHELL and cmd.exe/PowerShell do not;
+ * PROMPT is set by cmd.exe, while PSModulePath marks a PowerShell session.
+ */
+export function shellFamily(
   platform: NodeJS.Platform = process.platform,
-  shims = shimsDir(),
-): string {
-  return platform === "win32" ? `$env:Path = "${shims};$env:Path"` : RC_LINE;
+  env: NodeJS.ProcessEnv = process.env,
+): ShellFamily {
+  if (platform !== "win32") return "posix";
+  if (env.SHELL) return "posix"; // Git Bash / MSYS2 / Cygwin
+  return env.PROMPT && !env.PSModulePath ? "cmd" : "powershell";
+}
+
+/**
+ * The one-liner that puts the shims on PATH for the *current* shell.
+ * Three shells matter on Windows, and each rejects the others' syntax.
+ */
+export function activationLine(family: ShellFamily = shellFamily(), shims = shimsDir()): string {
+  switch (family) {
+    case "cmd":
+      return `set "PATH=${shims};%PATH%"`;
+    case "powershell":
+      return `$env:Path = "${shims};$env:Path"`;
+    default:
+      return RC_LINE;
+  }
 }
 
 /** Append the PATH block unless some form of it is already there. Null = already set up. */
@@ -91,26 +113,48 @@ try {
   else { $kind = $key.GetValueKind('Path') }
   $parts = @($current -split ';' | Where-Object { $_ -ne '' })
   foreach ($p in $parts) {
-    if ($p.TrimEnd('\\') -ieq $shims.TrimEnd('\\')) { Write-Output 'chvm:present'; exit 0 }
+    # compare expanded too: the value is read un-expanded on purpose, so an entry stored as
+    # %USERPROFILE%\\.chvm\\shims would never match and we would append a duplicate
+    $a = [Environment]::ExpandEnvironmentVariables($p).TrimEnd('\\')
+    if ($a -ieq $shims.TrimEnd('\\')) { Write-Output 'chvm:present'; exit 0 }
   }
   $key.SetValue('Path', ((@($shims) + $parts) -join ';'), $kind)
+  # Without a broadcast no running process re-reads the environment — explorer.exe included,
+  # so a terminal opened from the Start menu would still inherit the old PATH. This is the one
+  # service setx performs that a direct registry write does not.
+  Add-Type -Namespace ChvmNative -Name Win -MemberDefinition @'
+[DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@ -ErrorAction SilentlyContinue
+  try {
+    $r = [UIntPtr]::Zero
+    [ChvmNative.Win]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r) | Out-Null
+  } catch { }
   Write-Output 'chvm:added'
 } finally { $key.Close() }
 `;
   try {
-    const proc = Bun.spawnSync(
-      ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-      {
-        stdout: "pipe",
-        stderr: "pipe",
-        timeout: 60_000,
-        env: { ...process.env, CHVM_SETUP_SHIMS: shims },
-      },
-    );
+    // absolute on purpose: a bare "powershell.exe" is resolved with the cwd searched first on
+    // Windows, so a stray binary where setup happens to run would be executed instead
+    const powershell = process.env.SystemRoot
+      ? `${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+      : "powershell.exe";
+    const proc = Bun.spawnSync([powershell, "-NoProfile", "-NonInteractive", "-Command", script], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 60_000,
+      env: { ...process.env, CHVM_SETUP_SHIMS: shims },
+    });
     const out = proc.stdout.toString();
     if (out.includes("chvm:added")) return { kind: "user-path", rcFile: null, changed: true };
     if (out.includes("chvm:present")) return { kind: "user-path", rcFile: null, changed: false };
-    const detail = proc.stderr.toString().trim().split("\n").slice(-2).join(" ").trim();
+    // the first non-empty line carries the exception; the rest is the CategoryInfo trailer
+    const detail = (
+      proc.stderr
+        .toString()
+        .split(/\r?\n/)
+        .find((l) => l.trim() !== "") ?? ""
+    ).trim();
     return {
       kind: "none",
       rcFile: null,
@@ -127,15 +171,37 @@ try {
   }
 }
 
-/** Ensure the shims dir is on PATH, however this platform and shell do that. */
+/**
+ * Ensure the shims dir is on PATH, however this platform and shell do that.
+ *
+ * On Windows the user PATH is written unconditionally — including from Git Bash, which has an
+ * rc file of its own. Writing only that rc file would leave `crewhaus.cmd` unreachable from
+ * cmd.exe, PowerShell and Windows Terminal, which is the whole point of the Windows shim. The
+ * reverse is not a problem: MSYS translates the inherited Windows PATH into the bash PATH, so
+ * the user PATH covers Git Bash too.
+ */
 export function ensureRcPath(platform: NodeJS.Platform = process.platform): RcResult {
   const rcFile = rcFileForShell(undefined, platform);
+  if (platform === "win32") {
+    const user = ensureWindowsPath();
+    if (rcFile === null) return user;
+    const rc = writeRcFile(rcFile);
+    // report the user-PATH write: that is the one making the .cmd shim reachable
+    return { ...user, rcFile, changed: user.changed || rc.changed };
+  }
   if (rcFile === null) {
-    if (platform === "win32") return ensureWindowsPath();
     return { kind: "none", rcFile: null, changed: false };
   }
-  // Preserve a BOM and CRLF endings — PowerShell and Windows editors both produce them,
-  // and rewriting a profile without them can break the file for its original owner.
+  return writeRcFile(rcFile);
+}
+
+/**
+ * Append our block to a shell rc file.
+ *
+ * Preserves a BOM and CRLF endings — PowerShell and Windows editors both produce them, and
+ * rewriting a profile without them can break the file for its original owner.
+ */
+function writeRcFile(rcFile: string): RcResult {
   const raw = existsSync(rcFile) ? readFileSync(rcFile, "utf8") : "";
   const bom = raw.startsWith("﻿") ? "﻿" : "";
   const body = bom ? raw.slice(1) : raw;

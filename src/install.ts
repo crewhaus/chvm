@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PINNED_ENTRY_SEGMENTS } from "./layout";
+import { ENTRY_FILE, LEGACY_ENTRY_CANDIDATES } from "./layout";
 import { versionsDir } from "./paths";
 import { sortVersions } from "./semver";
 
@@ -9,19 +9,62 @@ export function versionDir(version: string): string {
   return join(versionsDir(), version);
 }
 
+/** The `bin.crewhaus` path an installed package declares, relative to the package root. */
+function declaredBin(dir: string): string | null {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(dir, "node_modules", "crewhaus", "package.json"), "utf8"),
+    );
+    const bin = parsed?.bin;
+    const raw = typeof bin === "string" ? bin : bin?.crewhaus;
+    if (typeof raw !== "string" || raw === "") return null;
+    // accept ./x, .\x and backslash separators — all name the same file
+    return raw.replace(/\\/g, "/").replace(/^\.\//, "");
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The runnable entry inside a pinned install — the package's own `dist/index.js`, run by bun.
+ * The runnable entry inside a pinned install, as a path relative to the version directory.
  *
- * Not `node_modules/.bin/crewhaus`: that is a symlink to this file on POSIX, but on Windows
- * `bun install` writes `.bunx`/`.exe` wrappers there instead, so the .bin path is not something
- * `bun` can run. Going straight at the package entry works identically everywhere.
+ * Read from the package's own `bin` rather than assumed: 0.1.3 and 0.1.4 publish
+ * `src/index.ts` and ship no `dist/` at all, so a hard-coded `dist/index.js` breaks them.
+ * Returns null when nothing runnable is there.
  */
-export function versionEntry(version: string): string {
-  return join(versionDir(version), ...PINNED_ENTRY_SEGMENTS);
+export function resolveEntry(version: string): string | null {
+  const dir = versionDir(version);
+  const recorded = readEntryFile(dir);
+  if (recorded && existsSync(join(dir, recorded))) return recorded;
+
+  const declared = declaredBin(dir);
+  if (declared) {
+    const rel = `node_modules/crewhaus/${declared}`;
+    if (existsSync(join(dir, rel))) return rel;
+  }
+  for (const candidate of LEGACY_ENTRY_CANDIDATES) {
+    if (existsSync(join(dir, candidate))) return candidate;
+  }
+  return null;
+}
+
+function readEntryFile(dir: string): string | null {
+  try {
+    const raw = readFileSync(join(dir, ENTRY_FILE), "utf8").trim();
+    return raw === "" ? null : raw;
+  } catch {
+    return null;
+  }
+}
+
+/** Absolute path to the runnable entry of a pinned install, or null when it is not installed. */
+export function versionEntry(version: string): string | null {
+  const rel = resolveEntry(version);
+  return rel === null ? null : join(versionDir(version), rel);
 }
 
 export function isInstalled(version: string): boolean {
-  return existsSync(versionEntry(version));
+  return resolveEntry(version) !== null;
 }
 
 export function installedVersions(): string[] {
@@ -38,29 +81,17 @@ function removeDir(dir: string): void {
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
-/**
- * The `bin.crewhaus` path the installed package declares. We run `dist/index.js` from a
- * hard-coded path in three places (here and both shims), so if a release ever moves its bin we
- * want a clear failure at install time rather than a shim that silently cannot find anything.
- */
-function declaredBin(dir: string): string | null {
-  try {
-    const parsed = JSON.parse(
-      readFileSync(join(dir, "node_modules", "crewhaus", "package.json"), "utf8"),
-    );
-    const bin = parsed?.bin;
-    if (typeof bin === "string") return bin;
-    if (typeof bin?.crewhaus === "string") return bin.crewhaus;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 /** Install crewhaus@version from npm into its own pinned directory, then verify it runs. */
 export function installVersion(version: string): void {
   if (isInstalled(version)) return;
   const dir = versionDir(version);
+  // never destroy a directory we did not create — a legacy install we failed to recognise
+  // is still the user's 100+MB download
+  const preexisting = existsSync(dir);
+  const rollback = () => {
+    if (!preexisting) removeDir(dir);
+  };
+
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "package.json"),
@@ -73,25 +104,22 @@ export function installVersion(version: string): void {
     timeout: 300_000,
   });
   if (add.exitCode !== 0) {
-    removeDir(dir);
+    rollback();
     const stderr = add.stderr.toString().trim().split("\n").slice(-4).join("\n");
     throw new Error(`bun add crewhaus@${version} failed:\n${stderr}`);
   }
 
-  const expected = PINNED_ENTRY_SEGMENTS.slice(2).join("/");
-  const declared = declaredBin(dir);
-  if (declared !== null && declared.replace(/^\.\//, "").replace(/\\/g, "/") !== expected) {
-    removeDir(dir);
+  const entry = resolveEntry(version);
+  if (entry === null) {
+    rollback();
     throw new Error(
-      `crewhaus@${version} runs from "${declared}", but chvm's shims expect "${expected}".\nThis version of chvm is too old for that release — update chvm.`,
+      `installed crewhaus@${version} but found nothing runnable in it — please report this.`,
     );
   }
-  if (!isInstalled(version)) {
-    removeDir(dir);
-    throw new Error(`installed crewhaus@${version} but ${expected} is missing from the package.`);
-  }
+  // record it so the shims never have to guess a layout
+  writeFileSync(join(dir, ENTRY_FILE), `${entry}\n`);
 
-  const check = Bun.spawnSync(["bun", versionEntry(version), "--version"], {
+  const check = Bun.spawnSync(["bun", join(dir, entry), "--version"], {
     cwd: dir,
     stdout: "pipe",
     stderr: "pipe",
@@ -99,7 +127,7 @@ export function installVersion(version: string): void {
   });
   const reported = check.stdout.toString().trim();
   if (check.exitCode !== 0 || reported !== version) {
-    removeDir(dir);
+    rollback();
     throw new Error(
       `installed crewhaus@${version} but it reported "${reported || check.stderr.toString().trim()}"`,
     );

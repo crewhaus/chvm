@@ -82,7 +82,7 @@ function shimOnPath(): boolean {
 }
 
 function verifySwitch(target: Target): void {
-  const reported = probeVersion(invocation(shimPath()));
+  const reported = probeVersion(invocation(shimPath(), ["--version"]));
   if (reported === null) {
     fail(`switched to ${describeTarget(target)}, but running \`crewhaus --version\` failed.`);
   }
@@ -172,7 +172,7 @@ export async function list(): Promise<void> {
   }
   const system = findSystemCrewhaus();
   if (system) {
-    const version = probeVersion(invocation(system));
+    const version = probeVersion(invocation(system, ["--version"]));
     const active = target === null || target.kind === "system";
     console.log(`${mark(active)}system${version ? ` (${version}, ${system})` : ` (${system})`}`);
   }
@@ -211,7 +211,7 @@ export async function current(): Promise<void> {
     const system = findSystemCrewhaus();
     if (system) {
       console.log(
-        `system → ${probeVersion(invocation(system)) ?? "unknown"} (${system}) — chvm default`,
+        `system → ${probeVersion(invocation(system, ["--version"])) ?? "unknown"} (${system}) — chvm default`,
       );
     } else {
       console.log("none — no version selected and no system crewhaus on PATH.");
@@ -225,7 +225,9 @@ export async function current(): Promise<void> {
     case "system": {
       const system = findSystemCrewhaus();
       if (system) {
-        console.log(`system → ${probeVersion(invocation(system)) ?? "unknown"} (${system})`);
+        console.log(
+          `system → ${probeVersion(invocation(system, ["--version"])) ?? "unknown"} (${system})`,
+        );
       } else {
         console.log("system — but no system crewhaus is on PATH right now.");
       }
@@ -250,7 +252,7 @@ export async function which(): Promise<void> {
     return;
   }
   const bin = versionEntry(target.version);
-  if (!existsSync(bin)) {
+  if (bin === null) {
     fail(`crewhaus ${target.version} is not installed — run: chvm install ${target.version}`);
   }
   console.log(bin);

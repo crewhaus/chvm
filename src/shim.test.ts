@@ -16,11 +16,14 @@ describe("SHIM_CONTENT (posix)", () => {
     expect(SHIM_CONTENT).toContain("local:*");
   });
 
-  test("runs the package entry, not node_modules/.bin", () => {
-    // .bin/crewhaus is a symlink on POSIX but a .bunx/.exe wrapper on Windows, so the shims
-    // go at the package's own dist/index.js on every platform
+  test("reads the recorded entry, and probes legacy layouts when there is none", () => {
+    // the entry is recorded at install time rather than assumed: 0.1.3 and 0.1.4 published
+    // src/index.ts and shipped no dist/ at all
+    expect(SHIM_CONTENT).toContain('read -r rel < "$root/entry"');
     expect(SHIM_CONTENT).toContain("node_modules/crewhaus/dist/index.js");
-    expect(SHIM_CONTENT).not.toContain("node_modules/.bin");
+    expect(SHIM_CONTENT).toContain("node_modules/crewhaus/src/index.ts");
+    // .bin is last: a symlink to the real entry on POSIX, a .bunx/.exe wrapper on Windows
+    expect(SHIM_CONTENT).toContain("node_modules/.bin/crewhaus");
   });
 
   test("survived TypeScript template interpolation intact", () => {
