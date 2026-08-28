@@ -29,10 +29,14 @@ let shims: string;
 const VERSION = "0.5.4";
 const WINDOWS = process.platform === "win32";
 
-function runChvm(args: string[], path: string): { code: number; stdout: string; stderr: string } {
+function runChvm(
+  args: string[],
+  path: string,
+  extraEnv: Record<string, string> = {},
+): { code: number; stdout: string; stderr: string } {
   const proc = Bun.spawnSync(["bun", chvmEntry, ...args], {
     cwd: repoRoot,
-    env: childEnv(path),
+    env: { ...childEnv(path), ...extraEnv },
     stdout: "pipe",
     stderr: "pipe",
     timeout: 300_000,
@@ -70,6 +74,14 @@ function childEnv(path: string): Record<string, string> {
   }
   env[WINDOWS ? "Path" : "PATH"] = path;
   env.CHVM_DIR = sandbox;
+  // `chvm use` now puts the shims dir on PATH by itself, which means editing a shell profile.
+  // Point HOME at the sandbox so the suite can never touch the real one.
+  env.HOME = sandbox;
+  env.USERPROFILE = sandbox;
+  // ...but that would also relocate bun's global install cache into the sandbox, which then has
+  // to be deleted at teardown — enough to time the afterAll hook out on Windows. Keep the cache
+  // outside, where it also survives between runs and makes the install step much faster.
+  env.BUN_INSTALL_CACHE_DIR = join(tmpdir(), "chvm-e2e-bun-cache");
   return env;
 }
 
@@ -121,8 +133,9 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  rmSync(sandbox, { recursive: true, force: true });
-});
+  // maxRetries: a Windows indexer or AV can hold a handle open just after the last spawn
+  rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+}, 60_000);
 
 describe("chvm end to end", () => {
   test(`install ${VERSION} from npm`, () => {
@@ -152,11 +165,37 @@ describe("chvm end to end", () => {
     expect(runShim(path, tmpdir())).toBe(VERSION);
   }, 60_000);
 
-  test("warns when the shims dir is not on PATH", () => {
-    const result = runChvm(["use", VERSION], process.env.PATH ?? "");
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("chvm setup");
-  }, 60_000);
+  // Windows is excluded on purpose: there the equivalent path writes HKCU\\Environment, and a
+  // test suite has no business editing the registry. That branch is unit-tested instead.
+  test.skipIf(WINDOWS)(
+    "puts the shims dir on PATH itself when it is not there yet",
+    () => {
+      // after `npm i -g @crewhaus/chvm`, `chvm use` is the first command anyone runs — it has to
+      // finish the job rather than print a note telling them to run a second one.
+      // SHELL is pinned so the rc file is known: runners disagree about it (unset on some,
+      // /bin/bash on others), and an unset SHELL takes a different branch entirely.
+      const rc = join(sandbox, ".zshrc");
+      rmSync(rc, { force: true });
+      const result = runChvm(["use", VERSION], process.env.PATH ?? "", { SHELL: "/bin/zsh" });
+      expect(result.code).toBe(0);
+      // it names the file it edited, rather than changing a profile silently
+      expect(result.stdout).toContain(rc);
+      expect(result.stdout).toContain("Open a new terminal");
+      expect(readFileSync(rc, "utf8")).toContain("chvm");
+    },
+    60_000,
+  );
+
+  test.skipIf(WINDOWS)(
+    "says what to run by hand when it will not edit a profile",
+    () => {
+      // an unset SHELL on posix means there is no rc file we are willing to touch
+      const result = runChvm(["use", VERSION], process.env.PATH ?? "", { SHELL: "" });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Add this yourself");
+    },
+    60_000,
+  );
 
   test("use system skips the shim and runs the next crewhaus on PATH", () => {
     const path = withPath(shims, fakeBin);

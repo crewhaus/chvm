@@ -220,11 +220,19 @@ where bun >nul 2>&1 && exit /b 0
 exit /b 1
 `;
 
+/**
+ * The interpreter a chvm entry needs: `node` for the built JS an npm install ships,
+ * `bun` for the TypeScript entry a git clone runs.
+ */
+function interpreterFor(entryPath: string): string {
+  return entryPath.endsWith(".ts") ? "bun" : "node";
+}
+
 /** A launcher so `chvm` itself is on PATH via the same shims dir. */
 export function chvmLauncherContent(entryPath: string): string {
   return `#!/usr/bin/env bash
 # chvm launcher — ${SHIM_MARKER} setup. Do not edit.
-exec bun "${entryPath.replace(/(["\\$`])/g, "\\$1")}" "$@"
+exec ${interpreterFor(entryPath)} "${entryPath.replace(/(["\\$`])/g, "\\$1")}" "$@"
 `;
 }
 
@@ -235,7 +243,7 @@ export function chvmCmdLauncherContent(entryPath: string): string {
   const escaped = entryPath.replace(/%/g, "%%");
   return `@echo off
 REM chvm launcher - ${SHIM_MARKER} setup. Do not edit.
-bun "${escaped}" %*
+${interpreterFor(entryPath)} "${escaped}" %*
 exit /b %ERRORLEVEL%
 `;
 }

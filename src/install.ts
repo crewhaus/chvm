@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { ENTRY_FILE, LEGACY_ENTRY_CANDIDATES } from "./layout";
 import { versionsDir } from "./paths";
+import { spawnSync, whichOnPath } from "./runtime";
 import { sortVersions } from "./semver";
 
 /** Where a pinned npm install of crewhaus@version lives. */
@@ -81,9 +82,23 @@ function removeDir(dir: string): void {
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
+/**
+ * chvm itself runs on Node, so it installs happily on a machine with no Bun — but the crewhaus
+ * releases it manages are Bun scripts, so this is where that gap first bites. Say so plainly
+ * rather than surfacing a spawn ENOENT.
+ */
+function requireBun(): void {
+  if (whichOnPath("bun") !== null) return;
+  throw new Error(
+    "bun is required to install and run crewhaus — install it from https://bun.sh\n" +
+      "(chvm itself runs on Node; the crewhaus releases it manages need Bun.)",
+  );
+}
+
 /** Install crewhaus@version from npm into its own pinned directory, then verify it runs. */
 export function installVersion(version: string): void {
   if (isInstalled(version)) return;
+  requireBun();
   const dir = versionDir(version);
   // never destroy a directory we did not create — a legacy install we failed to recognise
   // is still the user's 100+MB download
@@ -97,15 +112,13 @@ export function installVersion(version: string): void {
     join(dir, "package.json"),
     `${JSON.stringify({ name: `crewhaus-pin-${version}`, private: true }, null, 2)}\n`,
   );
-  const add = Bun.spawnSync(["bun", "add", "--exact", `crewhaus@${version}`], {
+  const add = spawnSync(["bun", "add", "--exact", `crewhaus@${version}`], {
     cwd: dir,
-    stdout: "pipe",
-    stderr: "pipe",
     timeout: 300_000,
   });
   if (add.exitCode !== 0) {
     rollback();
-    const stderr = add.stderr.toString().trim().split("\n").slice(-4).join("\n");
+    const stderr = add.stderr.trim().split("\n").slice(-4).join("\n");
     throw new Error(`bun add crewhaus@${version} failed:\n${stderr}`);
   }
 
@@ -119,17 +132,15 @@ export function installVersion(version: string): void {
   // record it so the shims never have to guess a layout
   writeFileSync(join(dir, ENTRY_FILE), `${entry}\n`);
 
-  const check = Bun.spawnSync(["bun", join(dir, entry), "--version"], {
+  const check = spawnSync(["bun", join(dir, entry), "--version"], {
     cwd: dir,
-    stdout: "pipe",
-    stderr: "pipe",
     timeout: 60_000,
   });
-  const reported = check.stdout.toString().trim();
+  const reported = check.stdout.trim();
   if (check.exitCode !== 0 || reported !== version) {
     rollback();
     throw new Error(
-      `installed crewhaus@${version} but it reported "${reported || check.stderr.toString().trim()}"`,
+      `installed crewhaus@${version} but it reported "${reported || check.stderr.trim()}"`,
     );
   }
 }

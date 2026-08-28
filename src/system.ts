@@ -10,6 +10,7 @@ import {
 import { delimiter, join } from "node:path";
 import { SHIM_MARKER } from "./layout";
 import { shimsDir } from "./paths";
+import { spawnSync } from "./runtime";
 
 /** Default when PATHEXT is unset — the executable extensions Windows always understands. */
 const DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD";
@@ -132,14 +133,12 @@ export function invocation(
 export function probeVersion(target: string | Invocation): string | null {
   const call = typeof target === "string" ? invocation(target, ["--version"]) : target;
   try {
-    const proc = Bun.spawnSync(call.argv, {
-      stdout: "pipe",
-      stderr: "pipe",
+    const proc = spawnSync(call.argv, {
       timeout: 30_000,
       windowsVerbatimArguments: call.verbatim,
     });
     if (proc.exitCode !== 0) return null;
-    const out = proc.stdout.toString().trim();
+    const out = proc.stdout.trim();
     return out === "" ? null : out;
   } catch {
     return null;

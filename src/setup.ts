@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { shimsDir } from "./paths";
+import { spawnSync } from "./runtime";
 
 /**
  * Matches our block and reasonable hand-written variants, on any platform.
@@ -141,22 +142,15 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wP
     const powershell = process.env.SystemRoot
       ? `${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
       : "powershell.exe";
-    const proc = Bun.spawnSync([powershell, "-NoProfile", "-NonInteractive", "-Command", script], {
-      stdout: "pipe",
-      stderr: "pipe",
+    const proc = spawnSync([powershell, "-NoProfile", "-NonInteractive", "-Command", script], {
       timeout: 60_000,
       env: { ...process.env, CHVM_SETUP_SHIMS: shims },
     });
-    const out = proc.stdout.toString();
+    const out = proc.stdout;
     if (out.includes("chvm:added")) return { kind: "user-path", rcFile: null, changed: true };
     if (out.includes("chvm:present")) return { kind: "user-path", rcFile: null, changed: false };
     // the first non-empty line carries the exception; the rest is the CategoryInfo trailer
-    const detail = (
-      proc.stderr
-        .toString()
-        .split(/\r?\n/)
-        .find((l) => l.trim() !== "") ?? ""
-    ).trim();
+    const detail = (proc.stderr.split(/\r?\n/).find((l) => l.trim() !== "") ?? "").trim();
     return {
       kind: "none",
       rcFile: null,
@@ -182,8 +176,11 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wP
  * reverse is not a problem: MSYS translates the inherited Windows PATH into the bash PATH, so
  * the user PATH covers Git Bash too.
  */
-export function ensureRcPath(platform: NodeJS.Platform = process.platform): RcResult {
-  const rcFile = rcFileForShell(undefined, platform);
+export function ensureRcPath(
+  platform: NodeJS.Platform = process.platform,
+  home = homedir(),
+): RcResult {
+  const rcFile = rcFileForShell(undefined, platform, home);
   if (platform === "win32") {
     const user = ensureWindowsPath();
     if (rcFile === null) return user;

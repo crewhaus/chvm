@@ -15,23 +15,30 @@ Switches apply immediately — in every open shell, no re-sourcing.
 
 ## Install
 
-Requires [Bun](https://bun.sh), on macOS, Linux, or Windows.
-
 ```console
-$ git clone https://github.com/crewhaus/chvm
-$ cd chvm
-$ bun install
-$ bun src/index.ts setup
+$ npm install -g @crewhaus/chvm
 ```
 
-Those commands run as written in bash, zsh, and PowerShell.
+That is the whole install, on macOS, Linux, and Windows. `bun add -g
+@crewhaus/chvm` works too, as does `pnpm add -g` or `yarn global add`.
 
-`setup` writes the `crewhaus` shim and puts it on your PATH: one line in your
-shell profile on macOS and Linux, and your user PATH on Windows. Open a new
-terminal and you're done.
+Then pick a version:
 
-chvm is not published on npm, and the `chvm` name there belongs to an unrelated
-package — clone it, don't `npm i -g`.
+```console
+$ chvm use latest
+```
+
+The first `chvm use` also puts the `crewhaus` shim on your PATH — one line in
+your shell profile on macOS and Linux, your user PATH on Windows — and tells you
+what it changed. Open a new terminal and you're done. (`chvm setup` does the same
+thing on its own if you would rather run it explicitly.)
+
+chvm itself runs on Node, so it installs anywhere npm does. [Bun](https://bun.sh)
+is what actually runs `crewhaus`, so you need it before `chvm use` can fetch a
+release — chvm says so if it is missing.
+
+> The bare `chvm` name on npm is an unrelated package. The scoped
+> `@crewhaus/chvm` above is this one.
 
 ## Commands
 
@@ -87,12 +94,24 @@ needs a compiled launcher rather than a batch file.
 ## Developing
 
 ```console
+$ git clone https://github.com/crewhaus/chvm
+$ cd chvm && bun install
+$ bun src/index.ts use latest   # run it from source
+```
+
+```console
 $ bun test src        # unit tests
 $ bun test test       # end-to-end (installs one real version from npm)
+$ bun run build       # bundle src/index.ts -> dist/index.js for npm
 $ bun run lint
 ```
 
-CI runs both suites on Linux, macOS, and Windows.
+The source is TypeScript run by Bun; `bun run build` bundles it to the Node-targeted
+`dist/index.js` that ships to npm. Nothing in `src/` may use a `Bun.*` global — the
+host-runtime calls live behind `src/runtime.ts` so the published CLI runs under Node.
+
+CI runs the suites on Linux, macOS, and Windows, and separately installs the packed
+tarball and runs it under Node 18 and 22 on all three.
 
 ## License
 

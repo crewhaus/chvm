@@ -32,6 +32,35 @@ jobs:
       - run: bun run lint
       - run: bun test src
 
+  # chvm is published to npm and must run under plain Node — that is what makes
+  # `npm i -g @crewhaus/chvm` a one-line install. Bun builds it; Node runs it.
+  node:
+    name: node ${{ matrix.node }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [18, 22]
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      # the packaged CLI, installed and run exactly as a user would
+      - run: npm pack
+        shell: bash
+      - run: npm install -g ./crewhaus-chvm-*.tgz
+        shell: bash
+      - run: chvm --version
+        shell: bash
+      - run: chvm ls-remote
+        shell: bash
+
   e2e:
     name: e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

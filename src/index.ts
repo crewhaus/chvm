@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import pkg from "../package.json";
 import * as commands from "./commands";
 
