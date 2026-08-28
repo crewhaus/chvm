@@ -87,8 +87,21 @@ describe("CMD_SHIM_CONTENT (windows)", () => {
     expect(CMD_SHIM_CONTENT).toContain("if %~z1 LSS 65536");
   });
 
-  test("delegates PATH+PATHEXT resolution to `where` rather than re-implementing it", () => {
+  test("delegates PATH+PATHEXT resolution to `where`, but not the cwd it also searches", () => {
     expect(CMD_SHIM_CONTENT).toContain("where crewhaus");
+    // `where` looks in the current directory first; "system" must mean PATH, not "whatever
+    // crewhaus-shaped file is in the folder I happen to be standing in"
+    expect(CMD_SHIM_CONTENT).toContain('if /i "%~dp1"=="%CD%\\" exit /b 0');
+  });
+
+  test("turns delayed expansion off explicitly, since `cmd /V:ON` would inherit it in", () => {
+    // omitting EnableDelayedExpansion does not disable it; an inherited !VAR! would eat a
+    // literal ! in a user's local: path
+    expect(CMD_SHIM_CONTENT).toContain("setlocal EnableExtensions DisableDelayedExpansion");
+  });
+
+  test("quotes user-supplied paths in echo, so & | < > cannot become live syntax", () => {
+    expect(CMD_SHIM_CONTENT).toContain('missing "%chvm_entry%"');
   });
 
   test("carries the marker every flavour needs, so isChvmShim can spot it", () => {
@@ -113,6 +126,11 @@ describe("launchers", () => {
     const launcher = chvmCmdLauncherContent("C:\\Users\\me\\chvm\\src\\index.ts");
     expect(launcher).toContain('bun "C:\\Users\\me\\chvm\\src\\index.ts" %*');
     expect(launcher).toContain("exit /b %ERRORLEVEL%");
+  });
+
+  test("cmd launcher escapes a % in the checkout path, which cmd would otherwise expand", () => {
+    const launcher = chvmCmdLauncherContent("C:\\o%dd\\src\\index.ts");
+    expect(launcher).toContain('bun "C:\\o%%dd\\src\\index.ts" %*');
   });
 });
 

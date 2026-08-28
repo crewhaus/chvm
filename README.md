@@ -74,6 +74,12 @@ PATH goes into your user environment (`HKCU\Environment`) rather than through
 `setx`, which silently truncates at 1024 characters. Only the *user* PATH is
 read or written; the machine PATH is never touched.
 
+One consequence worth knowing: Windows searches the machine PATH before the user
+PATH, so a `crewhaus` installed machine-wide (Chocolatey, or a machine-scope MSI)
+is found before the shim, and `chvm use` will appear to do nothing. Either
+uninstall that copy or move the shims entry into the machine PATH yourself —
+`chvm which` tells you which one is winning.
+
 One rough edge, shared with npm's and yarn's batch shims: pressing Ctrl-C while
 a command is running prompts `Terminate batch job (Y/N)?`. Getting rid of that
 needs a compiled launcher rather than a batch file.

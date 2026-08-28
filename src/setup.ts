@@ -112,13 +112,15 @@ try {
   if ($null -eq $current) { $kind = 'ExpandString'; $current = '' }
   else { $kind = $key.GetValueKind('Path') }
   $parts = @($current -split ';' | Where-Object { $_ -ne '' })
-  foreach ($p in $parts) {
-    # compare expanded too: the value is read un-expanded on purpose, so an entry stored as
-    # %USERPROFILE%\\.chvm\\shims would never match and we would append a duplicate
-    $a = [Environment]::ExpandEnvironmentVariables($p).TrimEnd('\\')
-    if ($a -ieq $shims.TrimEnd('\\')) { Write-Output 'chvm:present'; exit 0 }
-  }
-  $key.SetValue('Path', ((@($shims) + $parts) -join ';'), $kind)
+  $want = $shims.TrimEnd('\\')
+  # Compare expanded: the value is read un-expanded on purpose, so an entry stored as
+  # %USERPROFILE%\\.chvm\\shims would never match literally and we would append a duplicate.
+  $isOurs = { param($p) [Environment]::ExpandEnvironmentVariables($p).TrimEnd('\\') -ieq $want }
+  if ($parts.Count -gt 0 -and (& $isOurs $parts[0])) { Write-Output 'chvm:present'; exit 0 }
+  # Present but not first is not good enough — the shim has to win over whatever precedes it,
+  # and a user who hand-appended the directory can only be rescued by moving it.
+  $rest = @($parts | Where-Object { -not (& $isOurs $_) })
+  $key.SetValue('Path', ((@($shims) + $rest) -join ';'), $kind)
   # Without a broadcast no running process re-reads the environment — explorer.exe included,
   # so a terminal opened from the Start menu would still inherit the old PATH. This is the one
   # service setx performs that a direct registry write does not.

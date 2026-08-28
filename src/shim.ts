@@ -125,7 +125,7 @@ esac
 export const CMD_SHIM_CONTENT = `@echo off
 REM crewhaus shim - ${SHIM_MARKER} (CrewHaus version manager). Do not edit.
 REM "chvm use <version|system|local>" changes what this runs.
-setlocal EnableExtensions
+setlocal EnableExtensions DisableDelayedExpansion
 
 if not defined CHVM_DIR set "CHVM_DIR=%USERPROFILE%\\.chvm"
 
@@ -155,7 +155,7 @@ if not defined chvm_entry (
   )
 )
 if not defined chvm_entry (
-  >&2 echo chvm: crewhaus %chvm_target% is not installed - run: chvm install %chvm_target%
+  >&2 echo chvm: crewhaus "%chvm_target%" is not installed - run: chvm install "%chvm_target%"
   exit /b 127
 )
 call :chvm_need_bun "%chvm_target%"
@@ -167,7 +167,7 @@ exit /b %ERRORLEVEL%
 set "chvm_repo=%chvm_target:*local:=%"
 set "chvm_entry=%chvm_repo%\\${WIN_FACTORY}"
 if not exist "%chvm_entry%" (
-  >&2 echo chvm: local checkout is missing %chvm_entry%
+  >&2 echo chvm: local checkout is missing "%chvm_entry%"
   >&2 echo chvm: point chvm at a factory checkout again: chvm use local ^<path^>
   exit /b 127
 )
@@ -203,6 +203,9 @@ exit /b %ERRORLEVEL%
 
 :chvm_consider
 REM %1 is one \`where crewhaus\` hit. Accept it unless it is one of ours.
+REM \`where\` searches the CURRENT DIRECTORY before PATH; the POSIX shim walks PATH only, and
+REM running whatever crewhaus-shaped file happens to be in the cwd is not what "system" means
+if /i "%~dp1"=="%CD%\\" exit /b 0
 if /i "%~dp1"=="%CHVM_DIR%\\shims\\" exit /b 0
 REM only a script can be a chvm shim; never scan a large compiled binary on every run
 if %~z1 LSS 65536 (
@@ -227,9 +230,12 @@ exec bun "${entryPath.replace(/(["\\$`])/g, "\\$1")}" "$@"
 
 /** The same launcher for cmd.exe. */
 export function chvmCmdLauncherContent(entryPath: string): string {
+  // %% is how a literal % survives a batch file: an unescaped %FOO% in the checkout path
+  // would be expanded by cmd before bun ever sees it
+  const escaped = entryPath.replace(/%/g, "%%");
   return `@echo off
 REM chvm launcher - ${SHIM_MARKER} setup. Do not edit.
-bun "${entryPath}" %*
+bun "${escaped}" %*
 exit /b %ERRORLEVEL%
 `;
 }
