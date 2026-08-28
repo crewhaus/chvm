@@ -10,15 +10,27 @@
 export const SHIM_MARKER = "managed by chvm";
 
 /**
- * Where the runnable entry sits inside a pinned install, relative to that version's directory.
- *
- * NOT `node_modules/.bin/crewhaus`: on POSIX that is a symlink to this same file, but on Windows
- * `bun install` writes only `<name>.bunx` + `<name>.exe` there — no extensionless file and no
- * shebang handling — so the .bin path is unrunnable by `bun` on Windows. The package's own
- * `bin.crewhaus` has been `dist/index.js` for every published release; `installVersion` verifies
- * that on each install rather than trusting it.
+ * File `installVersion` writes inside a pinned install, naming that release's runnable entry
+ * as a path relative to the version directory, with forward slashes (which every platform and
+ * both shells accept). The shims read it instead of assuming a layout.
  */
-export const PINNED_ENTRY_SEGMENTS = ["node_modules", "crewhaus", "dist", "index.js"] as const;
+export const ENTRY_FILE = "entry";
+
+/**
+ * Where the entry has lived, newest first — the fallback chain for an install made by a chvm
+ * old enough not to have written an ENTRY_FILE.
+ *
+ * `dist/index.js` covers every release from 0.1.5 on. `src/index.ts` is what 0.1.3 and 0.1.4
+ * published — 2 of the 25 releases on npm, and the reason this is a list rather than a constant.
+ * `.bin/crewhaus` is the last resort: it is a symlink to the real entry on POSIX, but on Windows
+ * `bun install` writes `.bunx`/`.exe` wrappers there that `bun` cannot run, so it is POSIX-only
+ * in practice.
+ */
+export const LEGACY_ENTRY_CANDIDATES = [
+  "node_modules/crewhaus/dist/index.js",
+  "node_modules/crewhaus/src/index.ts",
+  "node_modules/.bin/crewhaus",
+] as const;
 
 /** Relative CLI entry inside a factory checkout, as path segments. */
 export const FACTORY_ENTRY_SEGMENTS = ["apps", "cli", "src", "index.ts"] as const;

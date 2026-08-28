@@ -81,7 +81,10 @@ export function findSystemCrewhaus(
 ): string | null {
   const shims = safeRealpath(shimsDir());
   const names = candidateNames("crewhaus", platform, pathext);
-  for (const entry of path.split(delimiter)) {
+  for (const raw of path.split(delimiter)) {
+    // Windows PATH entries are often quoted, and hand edits leave stray spaces;
+    // cmd.exe and where.exe both strip those before looking, so we must too
+    const entry = raw.trim().replace(/^"(.*)"$/, "$1");
     if (entry === "") continue;
     if (samePath(safeRealpath(entry), shims, platform)) continue;
     for (const name of names) {
@@ -96,24 +99,44 @@ export function findSystemCrewhaus(
   return null;
 }
 
+export interface Invocation {
+  argv: string[];
+  /** cmd.exe needs its command line handed over exactly as written — see `invocation`. */
+  verbatim: boolean;
+}
+
 /**
- * How to invoke a path so the OS will actually run it.
- * A `.cmd`/`.bat` is not an executable image — it has to go through cmd.exe.
+ * How to invoke a path, with arguments, so the OS will actually run it.
+ *
+ * A `.cmd`/`.bat` is not an executable image; only cmd.exe's batch handler can run one. The
+ * quoting is the subtle part. `cmd /s /c` strips the FIRST and LAST quote of everything after
+ * `/c` and runs the rest verbatim, so the single pair of quotes a spawn would put around
+ * `C:\Users\Max Meier\...\crewhaus.cmd` is exactly the pair cmd removes — and the path then
+ * splits on its space. The fix is the documented idiom: wrap the whole command line in one more
+ * quote pair and pass it as a single verbatim argument, so the pair cmd strips is the outer one
+ * and the path keeps its own.
  */
-export function invocation(target: string, platform: NodeJS.Platform = process.platform): string[] {
+export function invocation(
+  target: string,
+  args: string[] = [],
+  platform: NodeJS.Platform = process.platform,
+): Invocation {
   if (platform === "win32" && /\.(cmd|bat)$/i.test(target)) {
-    return ["cmd.exe", "/d", "/s", "/c", target];
+    const line = [target, ...args].map((a) => `"${a}"`).join(" ");
+    return { argv: ["cmd.exe", "/d", "/s", "/c", `"${line}"`], verbatim: true };
   }
-  return [target];
+  return { argv: [target, ...args], verbatim: false };
 }
 
 /** Run a crewhaus binary/entry and return what --version prints, or null on failure. */
-export function probeVersion(cmd: string[]): string | null {
+export function probeVersion(target: string | Invocation): string | null {
+  const call = typeof target === "string" ? invocation(target, ["--version"]) : target;
   try {
-    const proc = Bun.spawnSync([...cmd, "--version"], {
+    const proc = Bun.spawnSync(call.argv, {
       stdout: "pipe",
       stderr: "pipe",
       timeout: 30_000,
+      windowsVerbatimArguments: call.verbatim,
     });
     if (proc.exitCode !== 0) return null;
     const out = proc.stdout.toString().trim();

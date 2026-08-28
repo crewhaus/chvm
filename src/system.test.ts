@@ -113,22 +113,54 @@ describe("findSystemCrewhaus", () => {
 });
 
 describe("invocation", () => {
-  test("posix runs a path directly", () => {
-    expect(invocation("/usr/local/bin/crewhaus", "linux")).toEqual(["/usr/local/bin/crewhaus"]);
+  test("posix runs a path directly, with no verbatim quoting", () => {
+    expect(invocation("/usr/local/bin/crewhaus", ["--version"], "linux")).toEqual({
+      argv: ["/usr/local/bin/crewhaus", "--version"],
+      verbatim: false,
+    });
   });
 
   test("a .cmd is not an executable image — it has to go through cmd.exe", () => {
-    expect(invocation("C:\\x\\crewhaus.cmd", "win32")).toEqual([
-      "cmd.exe",
-      "/d",
-      "/s",
-      "/c",
-      "C:\\x\\crewhaus.cmd",
-    ]);
-    expect(invocation("C:\\x\\crewhaus.BAT", "win32")[0]).toBe("cmd.exe");
+    const call = invocation("C:\\x\\crewhaus.cmd", ["--version"], "win32");
+    expect(call.argv.slice(0, 4)).toEqual(["cmd.exe", "/d", "/s", "/c"]);
+    expect(call.verbatim).toBe(true);
+    expect(invocation("C:\\x\\crewhaus.BAT", [], "win32").argv[0]).toBe("cmd.exe");
+  });
+
+  test("a path with a space survives `cmd /s /c`, which strips the outer quote pair", () => {
+    // regression: a single quote pair is exactly what /s removes, so C:\Users\Max Meier\...
+    // arrived unquoted and cmd tried to run "C:\Users\Max". The whole line needs wrapping.
+    const call = invocation(
+      "C:\\Users\\Max Meier\\.chvm\\shims\\crewhaus.cmd",
+      ["--version"],
+      "win32",
+    );
+    const line = call.argv[4] as string;
+    expect(line.startsWith('""')).toBe(true);
+    // after cmd strips the first and last quote, the path is still quoted
+    expect(line.slice(1, -1)).toBe(
+      '"C:\\Users\\Max Meier\\.chvm\\shims\\crewhaus.cmd" "--version"',
+    );
   });
 
   test("a real .exe on Windows is run directly", () => {
-    expect(invocation("C:\\x\\crewhaus.exe", "win32")).toEqual(["C:\\x\\crewhaus.exe"]);
+    expect(invocation("C:\\x\\crewhaus.exe", ["--version"], "win32")).toEqual({
+      argv: ["C:\\x\\crewhaus.exe", "--version"],
+      verbatim: false,
+    });
+  });
+});
+
+describe("findSystemCrewhaus PATH hygiene", () => {
+  test("a quoted PATH entry still resolves (installers and hand edits both quote)", () => {
+    const dir = join(sandbox, "quoted");
+    const path = bin(dir, "crewhaus");
+    expect(findSystemCrewhaus(`"${dir}"`, "linux")).toBe(path);
+  });
+
+  test("a PATH entry padded with spaces still resolves", () => {
+    const dir = join(sandbox, "padded");
+    const path = bin(dir, "crewhaus");
+    expect(findSystemCrewhaus(`  ${dir}  `, "linux")).toBe(path);
   });
 });

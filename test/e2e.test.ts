@@ -74,12 +74,14 @@ function childEnv(path: string): Record<string, string> {
 }
 
 function runShim(path: string, cwd = homedir()): string {
-  const proc = Bun.spawnSync([...invocation(shimEntry()), "--version"], {
+  const call = invocation(shimEntry(), ["--version"]);
+  const proc = Bun.spawnSync(call.argv, {
     cwd,
     env: childEnv(path),
     stdout: "pipe",
     stderr: "pipe",
     timeout: 60_000,
+    windowsVerbatimArguments: call.verbatim,
   });
   return proc.stdout.toString().trim() || proc.stderr.toString().trim();
 }
@@ -221,7 +223,9 @@ describe("chvm end to end", () => {
   test("shim with a foreign CHVM_DIR does not exec itself forever", () => {
     const foreignDir = join(sandbox, "foreign-chvm");
     mkdirSync(foreignDir, { recursive: true });
-    const proc = Bun.spawnSync([...invocation(shimEntry()), "--version"], {
+    const call = invocation(shimEntry(), ["--version"]);
+    const proc = Bun.spawnSync(call.argv, {
+      windowsVerbatimArguments: call.verbatim,
       cwd: homedir(),
       // empty CHVM_DIR: the target defaults to "system"
       env: { ...childEnv(withPath(shims, fakeBin)), CHVM_DIR: foreignDir },
